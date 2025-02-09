@@ -5,22 +5,26 @@ const ELASTICSEARCH_URL = "https://es.eac-services.host.ualr.edu/banglejs_data/_
 const USERNAME = "";
 const PASSWORD = "";
 
-// Function to send data to Elasticsearch
-async function sendToElasticsearch(data) {
-    try {
-        // Encode the username and password in Base64 for Basic Auth
-        const auth = "Basic " + btoa(`${USERNAME}:${PASSWORD}`);
+let dataBuffer = "";
 
+async function sendToElasticsearch(hrmData = {}, gpsData = {}) {
+    try {
+        const combinedData = {
+            timestamp: new Date().toISOString(),
+            hrm: hrmData,  // Heart rate data
+            gps: gpsData   // GPS data
+        };
+
+        // Send the combined data to Elasticsearch
         let response = await fetch(ELASTICSEARCH_URL, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
-                "Authorization": auth  // Add authorization header
+                "Authorization": "Basic " + btoa(`${USERNAME}:${PASSWORD}`)  // Basic Authentication
             },
-            body: JSON.stringify(data)
+            body: JSON.stringify(combinedData)
         });
 
-        // Handle response
         let result = await response.json();
         logMessage("Data sent to Elasticsearch: " + JSON.stringify(result));
     } catch (error) {
@@ -37,6 +41,8 @@ function logMessage(message) {
 const connectBtn = document.getElementById("connectBtn");
 const startHRMBtn = document.getElementById("startHRM");
 const stopHRMBtn = document.getElementById("stopHRM");
+const startGPSBtn = document.getElementById("startGPS");
+const stopGPSBtn = document.getElementById("stopGPS");
 const vibrateBtn = document.getElementById("vibrate");
 
 const logDiv = document.getElementById("log");
@@ -85,22 +91,34 @@ function handleData(event) {
     let decoder = new TextDecoder("utf-8");
     let data = decoder.decode(event.target.value);
 
-    if (data.includes("bpm") && data.includes("confidence")) {
-        let cleanData = data.replace(/[\x1B\x5B\x4A]/g, "").trim(); // Remove ANSI escape codes
-        cleanData = cleanData.replace(/^[^\{]*/, "").replace(/[^}]*$/, "");
+    dataBuffer += data; // Append data to buffer
+    console.log("Data: " + data);
+    console.log("Data Buffer: " + dataBuffer);
 
-        logMessage("Cleaned: " + cleanData);
+    let cleanData = dataBuffer.replace(/[\x1B\x5B\x4A]/g, "").trim(); // Remove ANSI escape codes
+    cleanData = cleanData.replace(/=undefined/g, "").replace(/^[^\{]*/, "").replace(/[^}]*$/, "");
+    cleanData = cleanData.replace(/^[^\{]*/, "").replace(/[^}]*$/, "");
 
+    console.log("Cleaned Data: " + cleanData);
+
+    // check databuffer ends with } and parse it
+    if (cleanData.endsWith("}")) {
         try {
-            let hrData = JSON.parse(cleanData);
-            logMessage("Heart Rate: " + hrData.bpm + " bpm");
+            let parsedData = JSON.parse(cleanData);
+            logMessage("Parsed: " + JSON.stringify(parsedData));
+            dataBuffer = ""; // Clear the buffer
 
-            if (hrData.bpm > 0) {
-                hrData.timestamp = new Date().toISOString();
-                sendToElasticsearch(hrData);
+            if (parsedData.bpm > 0) {
+                sendToElasticsearch(parsedData);
+            } else if (parsedData.lat && parsedData.lon) {
+                sendToElasticsearch({}, parsedData);
             }
-        } catch (err) {
-            logMessage("Error parsing HRM data: " + err);
+            else {
+                logMessage("Invalid data received: " + JSON.stringify(parsedData));
+            }
+        }
+        catch (error) {
+            logMessage("Error parsing data: " + error);
         }
     }
 
@@ -117,11 +135,18 @@ async function sendCommand(command) {
 }
 
 // Heart Rate Monitoring Commands
-startHRMBtn.addEventListener("click", () => sendCommand(`Bangle.setHRMPower(1);
+startHRMBtn.addEventListener("click", () => sendCommand(`Bangle.buzz(1000);Bangle.setHRMPower(1);
 Bangle.on('HRM',function(hrm) {
   console.log(hrm);
 });`));
-stopHRMBtn.addEventListener("click", () => sendCommand('Bangle.setHRMPower(0); Bangle.removeAllListeners("HRM");'));
+stopHRMBtn.addEventListener("click", () => sendCommand('Bangle.buzz(1000);Bangle.setHRMPower(0); Bangle.removeAllListeners("HRM");'));
+
+// GPS Commands
+startGPSBtn.addEventListener("click", () => sendCommand(`Bangle.buzz(1000);Bangle.setGPSPower(1);
+Bangle.on('GPS',function(gps) {
+    console.log(gps);
+});`));
+stopGPSBtn.addEventListener("click", () => sendCommand('Bangle.buzz(1000);Bangle.setGPSPower(0); Bangle.removeAllListeners("GPS");'));
 
 // Vibrate Bangle.js
 vibrateBtn.addEventListener("click", () => sendCommand('Bangle.buzz(1000);'));
